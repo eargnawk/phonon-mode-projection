@@ -1,4 +1,4 @@
-# Phonon Mode Projection
+# Phonon mode projection
 
 This contains an example of phonon mode projection for reproducing Figure 3 from the paper:
 
