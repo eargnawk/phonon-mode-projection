@@ -231,11 +231,3 @@ projection.ipynb     annotated walk-through of the example
 tools/               ALAMODE displace.py and its interfaces (MIT, T. Tadano), kept for
                      reference; the projection no longer imports them
 ```
-
-## Credits
-
-The projection convention and the geometry bookkeeping follow
-[ALAMODE](https://github.com/ttadano/alamode) (`displace.py --pes`, © 2014–2020 Terumasa Tadano,
-MIT licence); a copy of those scripts is in `tools/`. The phonopy interface reads the output of
-[phonopy](https://phonopy.github.io/phonopy/) (A. Togo *et al.*). Please cite the paper above when
-using this example.
