@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modeproj"
+version = "1.0.0"
+description = "Phonon normal-mode projection of ab initio molecular dynamics trajectories"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["numpy>=1.20", "ase>=3.22", "matplotlib>=3.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+modeproj = "modeproj.cli:main"
+
+[tool.setuptools]
+packages = ["modeproj"]
