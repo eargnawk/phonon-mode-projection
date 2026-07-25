@@ -10,6 +10,7 @@ import numpy as np
 
 from .basis import ModeBasis
 from .plot import plot_amplitudes, plot_histograms
+from .sources import FORMAT_HELP, FORMATS
 from .trajectory import check_consistency, read_xdatcar
 
 DEFAULT_EVEC = "kno_221.mesh.evec"
@@ -29,7 +30,16 @@ examples:
 
   # a different mode, quick look at every 10th frame
   python -m modeproj project --mode 0.5,0.5,0.5:4 --stride 10
+
+  # phonons from phonopy instead of ALAMODE
+  python -m modeproj project --evec phonopy.yaml --force-constants FORCE_CONSTANTS \\
+      --primitive PPOSCAR --supercell SPOSCAR --mode R:1
+  python -m modeproj project --evec mesh.hdf5 --mode M:2
+
+eigenvector formats (--format, guessed from the file name by default):
 """
+EPILOG += "\n".join("  %-14s %s" % (key, text) for key, text in FORMAT_HELP.items())
+EPILOG += "\n"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,8 +52,29 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--evec", default=DEFAULT_EVEC,
-                       help="ALAMODE eigenvector file, PREFIX.evec (default: %(default)s)")
+        p.add_argument("--evec", "--phonons", dest="evec", default=DEFAULT_EVEC,
+                       help="eigenvectors of the phonon calculation: an ALAMODE "
+                            "PREFIX.evec, phonopy qpoints/mesh/band .yaml or .hdf5, or "
+                            "phonopy.yaml together with --force-constants "
+                            "(default: %(default)s)")
+        p.add_argument("--format", dest="source_format", default="auto", choices=FORMATS,
+                       help="format of the eigenvector file (default: %(default)s, "
+                            "guessed from the file name)")
+        p.add_argument("--force-constants", default=None,
+                       help="phonopy FORCE_CONSTANTS or force_constants.hdf5, when "
+                            "phonopy.yaml does not contain them")
+        p.add_argument("--force-sets", default=None,
+                       help="phonopy FORCE_SETS, as an alternative to "
+                            "--force-constants")
+        p.add_argument("--born", default=None,
+                       help="phonopy BORN file, for the non-analytic term correction")
+        p.add_argument("--nac", action="store_true",
+                       help="switch on phonopy's non-analytic term correction (needs "
+                            "BORN)")
+        p.add_argument("--nac-direction", default=None, metavar="X,Y,Z",
+                       help="direction along which q approaches Gamma for the LO-TO "
+                            "splitting, e.g. 1,0,0 (default: Gamma without the "
+                            "non-analytic term)")
         p.add_argument("--primitive", default=DEFAULT_PRIMITIVE,
                        help="POSCAR of the primitive cell (default: %(default)s)")
         p.add_argument("--supercell", default=DEFAULT_SUPERCELL,
@@ -112,18 +143,39 @@ def _cache_path(args) -> str | None:
     return args.cache or (args.evec + ".basis.npz")
 
 
+def _nac_direction(args):
+    if args.nac_direction is None:
+        return None
+    values = [float(t) for t in args.nac_direction.replace(",", " ").split()]
+    if len(values) != 3:
+        raise SystemExit("--nac-direction needs three components, got %r"
+                         % args.nac_direction)
+    return values
+
+
 def _load_basis(args) -> ModeBasis:
-    for path, what in ((args.evec, "eigenvector file"),
-                       (args.primitive, "primitive cell"),
-                       (args.supercell, "supercell")):
+    paths = [(args.evec, "eigenvector file"),
+             (args.primitive, "primitive cell"),
+             (args.supercell, "supercell")]
+    paths += [(path, "force-constants file") for path in
+              (args.force_constants, args.force_sets, args.born) if path]
+    for path, what in paths:
         if not os.path.exists(path):
             hint = ""
             if path.endswith(".evec") and os.path.exists(path + ".tar.gz"):
                 hint = ("\nThe archive %s.tar.gz is there; unpack it first:\n"
                         "  tar xzf %s.tar.gz" % (path, path))
             raise SystemExit("Cannot find the %s '%s'.%s" % (what, path, hint))
-    return ModeBasis.from_files(args.evec, args.primitive, args.supercell,
-                                cache=_cache_path(args), verbose=not args.quiet)
+
+    try:
+        return ModeBasis.from_files(
+            args.evec, args.primitive, args.supercell,
+            source_format=args.source_format, cache=_cache_path(args),
+            verbose=not args.quiet, force_constants=args.force_constants,
+            force_sets=args.force_sets, born=args.born, nac=args.nac,
+            nac_direction=_nac_direction(args))
+    except (ValueError, RuntimeError) as error:
+        raise SystemExit("%s" % error)
 
 
 def _selected_modes(basis: ModeBasis, args):

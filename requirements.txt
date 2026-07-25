@@ -1,3 +1,8 @@
 numpy>=1.20
 ase>=3.22
 matplotlib>=3.4
+
+# optional, only needed for phonopy input:
+#   PyYAML>=5.1     qpoints.yaml / mesh.yaml / band.yaml
+#   h5py>=3         qpoints.hdf5 / mesh.hdf5
+#   phonopy>=2.12   eigenvectors computed from phonopy.yaml + force constants

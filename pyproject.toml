@@ -11,7 +11,10 @@ requires-python = ">=3.8"
 dependencies = ["numpy>=1.20", "ase>=3.22", "matplotlib>=3.4"]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+yaml = ["PyYAML>=5.1"]
+hdf5 = ["h5py>=3"]
+phonopy = ["phonopy>=2.12", "PyYAML>=5.1", "h5py>=3"]
+test = ["pytest>=7", "PyYAML>=5.1", "h5py>=3"]
 
 [project.scripts]
 modeproj = "modeproj.cli:main"

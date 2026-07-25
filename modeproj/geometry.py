@@ -112,6 +112,67 @@ def map_supercell_to_primitive(primitive, supercell, tol: float = 1.0e-3):
     return map_s2p, lattice_points
 
 
+def reciprocal_transform(reference_cell: np.ndarray, other_cell: np.ndarray,
+                         tol: float = 1.0e-3, what: str = "primitive cell") -> np.ndarray:
+    """Matrix ``T`` converting fractional q points: ``q_other = q_reference @ T``.
+
+    The two cells have to describe the same lattice in the same cartesian frame; a
+    different but equivalent choice of primitive vectors (an integer, unimodular
+    transformation) is fine.
+    """
+    reference_cell = np.asarray(reference_cell, dtype=float)
+    other_cell = np.asarray(other_cell, dtype=float)
+    relation = other_cell @ np.linalg.inv(reference_cell)
+    determinant = np.linalg.det(relation)
+
+    if np.max(np.abs(relation - np.round(relation))) > tol or abs(abs(determinant) - 1) > tol:
+        raise ValueError(
+            "The %s used for the phonons is not the same lattice as your primitive "
+            "structure file:\n  phonon cell = N @ your cell with N =\n%s\n"
+            "N must be an integer matrix with |det N| = 1. Use the same primitive "
+            "cell (and the same cartesian orientation) for both."
+            % (what, np.array2string(relation, precision=4)))
+
+    return np.linalg.inv(reference_cell).T @ other_cell.T
+
+
+def atom_permutation(reference, lattice: np.ndarray, scaled_positions: np.ndarray,
+                     symbols, tol: float = 1.0e-3) -> np.ndarray:
+    """Match the atoms of another primitive cell onto the reference atoms.
+
+    Returns ``permutation`` with ``permutation[i]`` the index, in the other cell, of
+    the atom that is atom ``i`` of ``reference`` (an ASE ``Atoms`` object).  Positions
+    are compared in cartesian space modulo lattice translations.
+    """
+    reference_cell = reference.cell[:]
+    reference_cartesian = reference.get_scaled_positions() @ reference_cell
+    other_cartesian = np.asarray(scaled_positions) @ np.asarray(lattice)
+    reference_symbols = reference.get_chemical_symbols()
+    symbols = list(symbols)
+
+    if len(symbols) != len(reference_symbols):
+        raise ValueError(
+            "The phonon calculation uses %d atoms in the primitive cell, your "
+            "primitive structure file has %d." % (len(symbols), len(reference_symbols)))
+
+    inverse_cell = np.linalg.inv(reference_cell)
+    permutation = np.full(len(reference_symbols), -1, dtype=int)
+    for i, position in enumerate(reference_cartesian):
+        difference = (other_cartesian - position) @ inverse_cell
+        distance = np.linalg.norm(difference - np.round(difference), axis=1)
+        candidates = [j for j in np.argsort(distance)
+                      if distance[j] < tol and symbols[j] == reference_symbols[i]
+                      and j not in permutation]
+        if not candidates:
+            raise ValueError(
+                "Atom %d (%s) of your primitive cell has no counterpart in the "
+                "primitive cell of the phonon calculation. The two cells must have "
+                "the same atoms and the same origin."
+                % (i, reference_symbols[i]))
+        permutation[i] = candidates[0]
+    return permutation
+
+
 def is_cubic(cell: np.ndarray, tol: float = 1.0e-4) -> bool:
     cell = np.asarray(cell)
     lengths = np.linalg.norm(cell, axis=1)

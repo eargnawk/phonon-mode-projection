@@ -11,31 +11,11 @@ from __future__ import annotations
 
 import collections
 import itertools
-from dataclasses import dataclass
+import os
 
 import numpy as np
 
-#: 1 Rydberg expressed in cm^-1.  ``anphon`` stores omega^2 in Rydberg atomic
-#: units, so a frequency in cm^-1 is ``sign(omega2) * sqrt(|omega2|) * RY_TO_CM``.
-RY_TO_CM = 109737.31568
-
-BOHR_TO_ANGSTROM = 0.5291772108
-
-
-@dataclass
-class EvecData:
-    """Eigenvalues/eigenvectors read from an ALAMODE ``.evec`` file."""
-
-    qpoints: np.ndarray  #: (nq, 3) fractional coordinates, primitive reciprocal basis
-    omega2: np.ndarray  #: (nq, nmode) omega^2 in Rydberg atomic units
-    eigenvectors: np.ndarray  #: (nq, nmode, nmode) complex, polarization vectors
-    masses: np.ndarray  #: (nkd,) atomic masses in amu, one per atomic kind
-    primitive_lattice: np.ndarray  #: (3, 3) primitive lattice vectors in Bohr, rows
-
-    @property
-    def frequencies_cm(self) -> np.ndarray:
-        """(nq, nmode) frequencies in cm^-1; unstable modes get a negative value."""
-        return np.sign(self.omega2) * np.sqrt(np.abs(self.omega2)) * RY_TO_CM
+from .modedata import BOHR_TO_ANGSTROM, RY_TO_CM, ModeData
 
 
 class EvecFormatError(RuntimeError):
@@ -77,6 +57,18 @@ def _parse_header(fh) -> tuple[int, int, np.ndarray, np.ndarray]:
     return nmode, nq, masses, lattice
 
 
+def read_header(path: str) -> dict:
+    """Header information of an ALAMODE ``.evec`` file, without parsing the modes.
+
+    Returns a dict with ``nbranch``, ``nqpoint``, ``masses`` (amu) and
+    ``primitive_lattice`` (Angstrom, rows are vectors).
+    """
+    with open(path) as fh:
+        nmode, nq, masses, lattice = _parse_header(fh)
+    return {"nbranch": nmode, "nqpoint": nq, "masses": masses,
+            "primitive_lattice": lattice * BOHR_TO_ANGSTROM}
+
+
 def _skip_lines(fh, count: int) -> None:
     collections.deque(itertools.islice(fh, count), maxlen=0)
 
@@ -113,8 +105,9 @@ def read_eigenvectors(
 
     Returns
     -------
-    EvecData
-        Arrays ordered like ``qpoints`` (or like the file if ``qpoints`` is None).
+    ModeData
+        Arrays ordered like ``qpoints`` (or like the file if ``qpoints`` is None), in
+        the ``"lattice"`` phase convention.
     """
     wanted = None if qpoints is None else np.asarray(qpoints, dtype=float).reshape(-1, 3)
 
@@ -178,10 +171,13 @@ def read_eigenvectors(
             % (path, "\n".join("  %8.4f %8.4f %8.4f" % tuple(q) for q in missing))
         )
 
-    return EvecData(
+    frequencies_cm = np.sign(omega2) * np.sqrt(np.abs(omega2)) * RY_TO_CM
+    return ModeData(
         qpoints=q_found,
-        omega2=omega2,
+        frequencies_cm=frequencies_cm,
         eigenvectors=evec,
+        convention="lattice",
+        source="ALAMODE eigenvector file %s" % os.path.basename(path),
         masses=masses,
         primitive_lattice=lattice * BOHR_TO_ANGSTROM,
     )

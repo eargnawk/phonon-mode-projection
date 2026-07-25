@@ -19,6 +19,8 @@ from modeproj import (
     rolling_mean,
     supercell_matrix,
 )
+from modeproj.eigen import realify, to_lattice_convention
+from modeproj.evec import RY_TO_CM
 from modeproj.geometry import label_qpoints, map_supercell_to_primitive
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,11 +133,15 @@ def test_displacements_mean_reference(tmp_path):
 # ------------------------------------------------------------------ evec reader
 
 
-def write_evec(path, qpoints, omega2, eigenvectors, masses):
+def write_evec(path, qpoints, omega2, eigenvectors, masses, lattice=None):
+    """Write a minimal ALAMODE .evec file; ``lattice`` is in Angstrom."""
+    from modeproj.evec import BOHR_TO_ANGSTROM
     nmode = omega2.shape[1]
+    if lattice is None:
+        lattice = np.eye(3) * 4.0
     with open(path, "w") as fh:
         fh.write("# Lattice vectors of the primitive cell\n")
-        for row in np.eye(3) * 7.5:
+        for row in np.asarray(lattice) / BOHR_TO_ANGSTROM:
             fh.write("  %e %e %e\n" % tuple(row))
         fh.write("\n# Number of phonon modes: %d\n" % nmode)
         fh.write("# Number of k points : %d\n" % len(qpoints))
@@ -162,8 +168,9 @@ def test_read_eigenvectors_selects_requested_qpoints(tmp_path):
     write_evec(path, qpoints, omega2, eigenvectors, [39.1, 92.9, 16.0])
 
     data = read_eigenvectors(path, [[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    expected = np.sign(omega2) * np.sqrt(np.abs(omega2)) * RY_TO_CM
     assert np.allclose(data.qpoints, [[0.5, 0, 0], [0, 0, 0]])
-    assert np.allclose(data.omega2, omega2[[2, 0]], atol=1e-12)
+    assert np.allclose(data.frequencies_cm, expected[[2, 0]], rtol=1e-6)
     assert np.allclose(data.eigenvectors, eigenvectors[[2, 0]], atol=1e-6)
     # -0.5 and +0.5 differ by a reciprocal lattice vector and must both match
     assert np.allclose(read_eigenvectors(path, [[-0.5, 0.0, 0.0]]).qpoints,
@@ -194,7 +201,8 @@ def synthetic_basis(tmp_path, repeat=(2, 1, 1)):
     nmode = 3
     omega2 = np.tile(np.array([1e-6, 4e-6, 9e-6]), (len(qpoints), 1))
     eigenvectors = np.tile(np.eye(nmode, dtype=complex), (len(qpoints), 1, 1))
-    write_evec(tmp_path / "test.evec", qpoints, omega2, eigenvectors, [39.0983])
+    write_evec(tmp_path / "test.evec", qpoints, omega2, eigenvectors, [39.0983],
+               lattice=primitive.cell[:])
     return ModeBasis.from_files(str(tmp_path / "test.evec"), str(tmp_path / "PPOSCAR"),
                                 str(tmp_path / "SPOSCAR"), cache=None, verbose=False)
 
@@ -250,6 +258,47 @@ def test_degenerate_branches(tmp_path):
     assert list(basis.degenerate_branches(0, 0)) == [0]
 
 
+# ------------------------------------------------- eigenvector post-processing
+
+
+def test_realify_removes_a_global_phase():
+    """A vector multiplied by i is the same mode - its real part alone is not."""
+    eigenvectors = (1j * np.eye(3))[None]
+    frequencies = np.array([[10.0, 20.0, 30.0]])
+
+    real, rotated = realify(eigenvectors, frequencies)
+    assert rotated == []
+    assert np.allclose(np.abs(real[0]), np.eye(3))
+    assert np.allclose(np.linalg.norm(real[0], axis=1), 1.0)
+
+
+def test_realify_rotates_degenerate_complex_pairs():
+    """Complex combinations inside a degenerate group become a real basis."""
+    x, y, z = np.eye(3)
+    eigenvectors = np.array([[(x + 1j * y) / np.sqrt(2),
+                              (x - 1j * y) / np.sqrt(2),
+                              z + 0j]])
+    frequencies = np.array([[5.0, 5.0, 9.0]])
+
+    real, rotated = realify(eigenvectors, frequencies)
+    assert rotated == [0]
+    assert np.allclose(real[0] @ real[0].T, np.eye(3))          # orthonormal
+    assert np.allclose(np.abs(real[0][:2] @ z), 0.0)            # still spans x, y
+    assert np.allclose(np.abs(real[0][2]), z)
+
+
+def test_to_lattice_convention_matches_the_definition():
+    positions = np.array([[0.0, 0.0, 0.0], [0.5, 0.25, 0.25]])
+    qpoints = np.array([[0.5, 0.5, 0.0]])
+    rng = np.random.default_rng(7)
+    eigenvectors = (rng.normal(size=(1, 6, 6)) + 1j * rng.normal(size=(1, 6, 6)))
+
+    converted = to_lattice_convention(eigenvectors, qpoints, positions)
+    phases = np.exp(2j * np.pi * (qpoints @ positions.T))       # (1, 2)
+    expected = eigenvectors.reshape(1, 6, 2, 3) * phases[:, None, :, None]
+    assert np.allclose(converted.reshape(1, 6, 2, 3), expected)
+
+
 # ------------------------------------------------------------------------ misc
 
 
@@ -277,4 +326,22 @@ def test_example_reproduces_reference_amplitudes():
     # values of the original notebook implementation for frame 5
     assert amplitudes["Q_G_1"][5] == pytest.approx(1.26575, abs=1e-4)
     assert amplitudes["Q_M_2"][5] == pytest.approx(-1.72265, abs=1e-4)
-    assert amplitudes["Q_R_1"][5] == pytest.approx(-1.14303, abs=1e-4)
+    # R branch 1 sits in a threefold degenerate group, so its eigenvectors are only
+    # defined up to a rotation and the sign is not comparable; the magnitude is
+    assert abs(amplitudes["Q_R_1"][5]) == pytest.approx(1.14303, abs=1e-4)
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, "kno_221.mesh.evec")),
+                    reason="unpack kno_221.mesh.evec.tar.gz to run this test")
+def test_example_projection_conserves_the_norm():
+    """Parseval over all 8 x 15 modes of the real example."""
+    basis = ModeBasis.from_files(os.path.join(ROOT, "kno_221.mesh.evec"),
+                                 os.path.join(ROOT, "PPOSCAR"),
+                                 os.path.join(ROOT, "SPOSCAR"),
+                                 cache=None, verbose=False)
+    displacements = read_xdatcar(os.path.join(ROOT, "XDATCAR"), start=1,
+                                 stop=20).displacements()
+    amplitudes = basis.project(displacements)
+    total = (amplitudes ** 2).sum(axis=(1, 2))
+    expected = basis.ncells * ((displacements * basis.mass_sqrt) ** 2).sum(axis=(1, 2))
+    assert total == pytest.approx(expected, rel=1e-6)
